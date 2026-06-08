@@ -29,7 +29,7 @@ CloneEmpires, klasik Facebook oyunu **Social Empires**'ten ilham alan, Python & 
 
 ```bash
 # 1. Repoyu klonlayın
-git clone https://github.com/baranbeey/CloneEmpires.git
+git clone https://github.com/MrSqy/CloneEmpires.git
 cd CloneEmpires
 
 # 2. Sanal ortam oluşturun
