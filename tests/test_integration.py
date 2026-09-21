@@ -87,7 +87,8 @@ class TestWorkerSystem:
         w.assign_task("gather", node)
         for _ in range(300):
             w.update(1 / 60.0, world, economy)
-        assert economy.resources["wood"] > 0 or w.task is None
+        assert node.amount < 100
+        assert economy.resources["wood"] > 10000
 
 
 class TestProductionQueue:
@@ -170,7 +171,7 @@ class TestConstructionManager:
             economy.resources[r] = 1000
         world = World()
         cm = ConstructionManager(world, economy)
-        b = cm.place_building("woodcutter", 10, 10)
+        b = cm.place_building("woodcutter", 24, 24)
         assert b is not None
         assert b.building_type == "woodcutter"
         assert b.is_constructed is False
@@ -183,7 +184,7 @@ class TestConstructionManager:
         world = World()
         cm = ConstructionManager(world, economy)
         assert cm.can_build("woodcutter") is False
-        b = cm.place_building("woodcutter", 10, 10)
+        b = cm.place_building("woodcutter", 24, 24)
         assert b is None
 
 

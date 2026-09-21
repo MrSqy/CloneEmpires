@@ -22,7 +22,7 @@ class Button:
         self.color = color
         self.hover_color = hover_color
         self.hovered = False
-    
+
     def draw(self, surface: pygame.Surface, font: pygame.font.Font):
         color = self.hover_color if self.hovered else self.color
         pygame.draw.rect(surface, color, self.rect)
@@ -30,11 +30,10 @@ class Button:
         text_surf = font.render(self.text, True, (255, 255, 255))
         text_rect = text_surf.get_rect(center=self.rect.center)
         surface.blit(text_surf, text_rect)
-    
+
     def handle_event(self, event: pygame.event.Event, offset=(0, 0)) -> bool:
-        mx, my = pygame.mouse.get_pos()
-        rx, ry = self.rect.x + offset[0], self.rect.y + offset[1]
-        self.hovered = rx <= mx <= rx + self.rect.w and ry <= my <= ry + self.rect.h
+        mx, my = getattr(event, "pos", pygame.mouse.get_pos())
+        self.hovered = self.rect.move(offset).collidepoint(mx, my)
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.hovered:
             if self.callback:
                 self.callback()
@@ -301,7 +300,7 @@ class UIManager:
 
     def clear_buttons(self):
         self.buttons.clear()
-    
+
     def add_button(self, x: int, y: int, w: int, h: int, text: str, callback,
                    color=(60, 60, 60), hover_color=(90, 90, 90)):
         btn = Button(pygame.Rect(x, y, w, h), text, callback, color, hover_color)
@@ -313,29 +312,29 @@ class UIManager:
         on_remove: optional callback(building, worker) to override default remove."""
         if not hasattr(building, 'assigned_workers') or not building.assigned_workers:
             return
-        
+
         for i, worker in enumerate(building.assigned_workers):
             if not worker.is_alive():
                 continue
             wx = SCREEN_WIDTH - 220 + i * 50 + 2
             wy = 10 + 22 + 2  # matching _draw_worker_panel positions
-            
+
             def make_callback(b=building, w=worker):
                 if on_remove:
                     return lambda: on_remove(b, w)
                 return lambda: b.remove_worker(w)
-            
+
             self.add_button(wx, wy, 36, 36, "", make_callback())
-    
+
     def handle_event(self, event: pygame.event.Event):
         """Handle UI button clicks. Call this from app.py event loop."""
         if self.handle_market_event(event):
             return True
         for btn in self.buttons:
-            if btn.handle_event(event, offset=(0, SCREEN_HEIGHT - 100)):
+            if btn.handle_event(event, offset=(0, SCREEN_HEIGHT - 110)):
                 return True
         return False
-    
+
     def draw_buttons(self, surface: pygame.Surface):
         for btn in self.buttons:
             btn.draw(surface, self.font)
@@ -412,7 +411,9 @@ class UIManager:
                 mx = status["max_progress"] or 1.0
                 pct = int(100 * status["progress"] / mx)
                 cur = status["current"]["unit_type"]
-                txt = self.font.render(f"Sırada: {remaining} | Üretiliyor: {cur} %{pct}", True, (200, 200, 200))
+                state = 'Geliştirme bekleniyor' if not building.is_constructed else (
+                    'Boş hücre bekleniyor' if pct >= 100 else f'%{pct}')
+                txt = self.font.render(f"Sırada: {remaining} | {cur}: {state}", True, (200, 200, 200))
                 surface.blit(txt, (x, y + y_off))
             else:
                 txt = self.font.render("Üretim kuyruğu boş", True, (150, 150, 150))
@@ -446,31 +447,31 @@ class UIManager:
         x, y: top-left position on the bar surface."""
         if not hasattr(building, 'assigned_workers') or not building.assigned_workers:
             return
-        
+
         font_small = pygame.font.SysFont("arial", 12)
         panel_title = self.font.render("Köylüler", True, (200, 200, 200))
         surface.blit(panel_title, (x, y))
-        
+
         for i, worker in enumerate(building.assigned_workers):
             if not worker.is_alive():
                 continue
             wx = x + i * 50
             wy = y + 22
-            
+
             # Worker portrait background
             locked = getattr(building, 'worker_active', False)
             bg_color = (80, 80, 80) if locked else (100, 100, 100)
             pygame.draw.rect(surface, bg_color, (wx, wy, 40, 40))
             pygame.draw.rect(surface, (150, 150, 150), (wx, wy, 40, 40), 1)
-            
+
             # Worker icon (colored circle for now)
             pygame.draw.circle(surface, (180, 150, 90), (wx + 20, wy + 18), 12)
-            
+
             # Lock indicator if production is active
             if locked:
                 lock_text = font_small.render("🔒", True, (255, 200, 50))
                 surface.blit(lock_text, (wx + 25, wy + 2))
-            
+
             # Worker label
             label = font_small.render(f"K{i+1}", True, (255, 255, 255))
             surface.blit(label, (wx + 12, wy + 42))

@@ -105,6 +105,8 @@ class Renderer:
 
     def _anim_action(self, e):
         """Birimin mevcut aksiyonunu döndürür: 'walk' / 'attack' / None(idle)."""
+        if getattr(e, 'movement_error', '') and not getattr(e, 'path', None):
+            return None
         task = getattr(e, 'task', None)
         if task == 'working':
             return 'attack'
@@ -149,7 +151,8 @@ class Renderer:
     def pick_entity_at(self, screen_pos, entities):
         """Verilen ekran noktasındaki en öndeki (en büyük y) canlı entity'yi döndürür."""
         hits = [e for e in entities
-                if e.is_alive() and self.entity_screen_rect(e).collidepoint(screen_pos)]
+                if e.is_alive() and not getattr(e, "is_inside_building", None)
+                and self.entity_screen_rect(e).collidepoint(screen_pos)]
         if not hits:
             return None
         return max(hits, key=lambda e: e.y)

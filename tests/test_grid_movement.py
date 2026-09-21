@@ -104,10 +104,11 @@ def test_worker_gathers_from_adjacent_cell():
     w.add_entity(wk)
     w.add_entity(res)
     wk.assign_task("gather", res)
+    before = eco.resources["wood"]
     gathered = False
     for _ in range(120):
         wk.update(0.05, w, eco)
-        if eco.resources["wood"] > 0:
+        if eco.resources["wood"] > before:
             gathered = True
             break
     assert gathered

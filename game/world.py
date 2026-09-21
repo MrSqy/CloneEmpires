@@ -1,4 +1,6 @@
 from collections import deque
+from uuid import uuid4
+import time
 from typing import List, Optional
 from game.constants import MAP_WIDTH, MAP_HEIGHT
 from game.entities.base_entity import BaseEntity
@@ -7,6 +9,10 @@ from game.grid import cell_of
 
 class World:
     def __init__(self):
+        self.world_id = uuid4().hex
+        self.name = "Dünya"
+        self.processed_at = time.time()
+        self.created_at = self.processed_at
         self.width = MAP_WIDTH
         self.height = MAP_HEIGHT
         self.entities: List[BaseEntity] = []
@@ -35,7 +41,7 @@ class World:
         opsiyonel (yol planlarken kendi aralarında üst üste binmesinler)."""
         cells = set()
         for e in self.entities:
-            if e is ignore or not e.is_alive():
+            if e is ignore or not e.is_alive() or getattr(e, 'is_inside_building', None):
                 continue
             if hasattr(e, 'building_type') or hasattr(e, 'resource_type'):
                 cells.add(cell_of(e.x, e.y))
@@ -62,7 +68,7 @@ class World:
         """cell'de (ignore hariç) canlı bir birim oturuyor mu? Hareket
         sırasında üst üste binmeyi önlemek için dinamik kontrol."""
         for e in self.entities:
-            if e is ignore or not e.is_alive():
+            if e is ignore or not e.is_alive() or getattr(e, 'is_inside_building', None):
                 continue
             if hasattr(e, 'unit_type') and cell_of(e.x, e.y) == cell:
                 return True
@@ -117,7 +123,7 @@ class World:
         en yakın boş kareye gönderir (MVP üst-üste-binme çözümü)."""
         seen = {}
         for e in self.entities:
-            if not (hasattr(e, 'unit_type') and e.is_alive()):
+            if not (hasattr(e, 'unit_type') and e.is_alive()) or getattr(e, 'is_inside_building', None):
                 continue
             settled = getattr(e, '_settled', None)
             if settled is None or not settled() or getattr(e, 'path', None):

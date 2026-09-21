@@ -32,6 +32,9 @@ class Unit(BaseEntity):
         self.is_player = True
         self.last_attacker = None
         self.manual_override = False
+        self.move_goal = None
+        self.repath_timer = 0.0
+        self.movement_error = ""
 
     # ----------------------------------------------------------------- ızgara
     @property
@@ -71,6 +74,13 @@ class Unit(BaseEntity):
 
         if self.state_machine.current == "MOVE":
             self._advance_along_path(dt)
+            if not self.path and self.move_goal and self.cell != self.move_goal:
+                self.repath_timer -= dt
+                if self.repath_timer <= 0:
+                    self.path = self._compute_path_to(self.move_goal)
+                    self.repath_timer = 0.5
+                if not self.path:
+                    return
             if not self.path:
                 self.manual_override = False
                 self.state_machine.transition("IDLE")
@@ -82,6 +92,7 @@ class Unit(BaseEntity):
             self.target = None
             self.path = []
             self.target_pos = None
+            self.movement_error = ""
             self.state_machine.transition("IDLE")
             return
         # Kutsal kural: saldırmadan önce bir hücre merkezine otur
@@ -95,6 +106,7 @@ class Unit(BaseEntity):
             # menzilde: yerinde dur (hasar BattleManager'da uygulanır)
             self.path = []
             self.target_pos = None
+            self.movement_error = ""
             return
         # menzil dışı: ızgara üzerinden yaklaş
         self._chase(dt)
@@ -103,17 +115,24 @@ class Unit(BaseEntity):
         if self.path:
             self._advance_along_path(dt)
             return
+        self.repath_timer = max(0.0, self.repath_timer - dt)
+        if self.repath_timer > 1e-9:
+            return
+        self.repath_timer = 0.5
         w = getattr(self, 'world', None)
         if w is None or not self.target:
             return
         goal = w.nearest_free_cell(cell_of(self.target.x, self.target.y), ignore=self)
         if goal is None:
+            self.movement_error = "Hedefe ulaşılamıyor."
             return
         path = find_path(self.cell, goal, w.make_blocked(ignore=self))
         if path:
             self.path = path
             self.target_pos = (float(path[0][0]), float(path[0][1]))
             self._advance_along_path(dt)
+        else:
+            self.movement_error = "Hedefe ulaşılamıyor."
 
     def _next_cell_occupied(self) -> bool:
         w = getattr(self, 'world', None)
@@ -122,7 +141,7 @@ class Unit(BaseEntity):
         nxt = self.path[0]
         if nxt == self.cell:
             return False
-        return w.unit_at_cell(nxt, ignore=self)
+        return w.cell_blocked(nxt, ignore=self)
 
     def _advance_along_path(self, dt: float):
         """Bir sonraki hücre merkezine doğru ilerler; varınca tam oturur ve
@@ -132,10 +151,12 @@ class Unit(BaseEntity):
         # Kutsal kural korunur: bir merkezde otururken sıradaki hücre başka bir
         # birimle doluysa o merkezde kal (üst üste binmeyi önler). Yeni leg'e
         # ancak hedef hücre boşken başlanır.
-        if self._settled() and self._next_cell_occupied():
-            self.path = []
+        if self._next_cell_occupied():
+            self.path = [] if self._settled() else [self.cell]
             self.target_pos = None
+            self.movement_error = "Yol kapalı; güvenli yerde bekleniyor."
             return
+        self.movement_error = ""
         tx, ty = self.path[0]
         dx = tx - self.x
         dy = ty - self.y
@@ -154,12 +175,18 @@ class Unit(BaseEntity):
         w = getattr(self, 'world', None)
         if w is None:
             return [goal_cell] if goal_cell != self.cell else []
+        if not (0 <= goal_cell[0] < w.width and 0 <= goal_cell[1] < w.height):
+            self.movement_error = "Hedef harita dışında."
+            return []
         free = w.nearest_free_cell(goal_cell, ignore=self)
         if free is not None:
             goal_cell = free
+        if free is None:
+            self.movement_error = "Hedefe ulaşılamıyor."
+            return []
+        self.move_goal = goal_cell
         path = find_path(self.cell, goal_cell, w.make_blocked(ignore=self))
-        if not path and goal_cell != self.cell:
-            path = [goal_cell]
+        self.movement_error = "Hedefe ulaşılamıyor." if not path and goal_cell != self.cell else ""
         return path
 
     def move_to(self, x: float, y: float):
@@ -170,7 +197,9 @@ class Unit(BaseEntity):
         self.manual_override = True
         if hasattr(self, 'gather_timer'):
             self.gather_timer = 0.0
-        self.path = self._compute_path_to(cell_of(x, y))
+        self.move_goal = cell_of(x, y)
+        self.repath_timer = 0.5
+        self.path = self._compute_path_to(self.move_goal)
         self.target_pos = (float(self.path[0][0]), float(self.path[0][1])) if self.path else None
         self.state_machine.transition("MOVE")
 
@@ -181,6 +210,7 @@ class Unit(BaseEntity):
         self.manual_override = False
         self.target = target
         self.path = []
+        self.repath_timer = 0.0
         self.target_pos = None
         self.attack_cooldown = 1.0 / self.stats.attack_speed
         self.state_machine.transition("ATTACK")
@@ -191,6 +221,7 @@ class Unit(BaseEntity):
         self.manual_override = False
         self.target = target
         self.path = []
+        self.repath_timer = 0.0
         self.target_pos = None
         self.attack_cooldown = 1.0 / self.stats.attack_speed
         self.state_machine.transition("ATTACK")

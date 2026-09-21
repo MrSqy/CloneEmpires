@@ -1,7 +1,9 @@
+from uuid import uuid4
 from game.models import EntityState, Position
 
 class BaseEntity:
     def __init__(self, name: str, x: float, y: float):
+        self.entity_id = uuid4().hex
         self.name = name
         self.state = EntityState(position=Position(x, y))
         self.sprite = None

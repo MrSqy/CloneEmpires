@@ -37,4 +37,5 @@ class SelectionManager:
 
     def get_selected_units(self) -> List[Unit]:
         return [e for e in self.selected
-                if isinstance(e, Unit) and not getattr(e, 'is_inside_building', None)]
+                if isinstance(e, Unit) and e.is_alive() and e.is_player
+                and not getattr(e, 'is_inside_building', None)]

@@ -17,8 +17,10 @@ class Building(BaseEntity):
         super().__init__(building_type, x, y)
         self.building_type = building_type
         self.cost = cost or {}
-        self.stats = stats or BuildingStats()
+        from game.building_catalog import get_building_level
+        self.stats = stats or BuildingStats(level=get_building_level(building_type))
         self.production_timer = 0.0
+        self.production_processed = 0
         self.is_producing = False
         self.construction_progress = 0.0
         self.is_constructed = True  # Existing buildings start constructed
@@ -65,8 +67,10 @@ class Building(BaseEntity):
 
     def assign_worker(self, worker) -> bool:
         from game.work_modes import MAX_WORKERS
-        if self.worker_active:
-            return False  # Cannot enter while production is running
+        if self.worker_active or not self.is_constructed or not worker.is_alive():
+            return False
+        if worker.is_inside_building is not None:
+            return False
         if self.resource_type() is None:
             return False
         if worker in self.assigned_workers or len(self.assigned_workers) >= MAX_WORKERS:
@@ -75,6 +79,10 @@ class Building(BaseEntity):
         worker.task = "working"
         worker.task_target = self
         worker.is_inside_building = self
+        worker.path = []
+        worker.target = None
+        worker.target_pos = None
+        worker.state_machine.transition("IDLE")
         # Snap worker position to building center (hidden visually)
         worker.state.position.x = self.x
         worker.state.position.y = self.y
@@ -105,7 +113,7 @@ class Building(BaseEntity):
         from game.work_modes import gem_cost, duration_seconds, WORK_MODES
         if mode_key not in WORK_MODES:
             return False
-        if not self.assigned_workers or self.worker_active:
+        if not self.is_constructed or not self.assigned_workers or self.worker_active:
             return False
         if not economy.spend({"gem": gem_cost(mode_key)}):
             return False
@@ -115,12 +123,8 @@ class Building(BaseEntity):
         return True
 
     def _free_workers(self):
-        for w in self.assigned_workers:
-            if getattr(w, "task", None) == "working":
-                w.task = None
-                w.task_target = None
-            w.is_inside_building = None
-        self.assigned_workers = []
+        for worker in list(self.assigned_workers):
+            self.remove_worker(worker)
 
     def cancel_worker_production(self):
         """Üretimi iptal eder (kısmi ödeme yok, mücevher iadesi yok).
@@ -167,48 +171,30 @@ class Building(BaseEntity):
         return all(resources.get(k, 0) >= v for k, v in self.cost.items())
 
     def start_production(self):
+        if self.is_producing:
+            return
         self.is_producing = True
         self.production_timer = 0.0
+        self.production_processed = 0
 
     def stop_production(self):
         self.is_producing = False
 
     def update(self, dt: float, economy) -> bool:
-        """Process production for this frame. Returns True if resources were produced."""
-        if not self.is_producing:
+        """Toplam üretim hakkının yalnız yeni tam sayı kısmını işler."""
+        if not self.is_producing or not self.is_constructed or not self.resource_type():
             return False
-        
-        self.production_timer += dt
-        
-        # Determine resource type from building_type
-        resource_map = {
-            "woodcutter": "wood",
-            "quarry": "stone",
-            "farm": "food",
-            "gold_mine": "gold",
-        }
-        
-        res_type = resource_map.get(self.building_type)
-        if not res_type:
-            return False
-        
-        # Produce resources using f(t) formula
         from game.economy import EconomyEngine
+        self.production_timer += max(0.0, dt)
         total = EconomyEngine.calculate_production(
-            base_rate=self.stats.production_rate,
-            duration=self.production_timer,
-            building_level=self.stats.level
-        )
-        
-        # Only deliver whole amounts
-        amount = int(total)
-        if amount > 0:
-            economy.add_resources({res_type: amount})
-            # Reset timer, keeping fractional remainder
-            self.production_timer = 0.0
-            return True
-        
-        return False
+            self.stats.production_rate, self.production_timer, self.stats.level)
+        whole = int(total + 1e-9)
+        amount = max(0, whole - self.production_processed)
+        # Depoya sığmayan miktar da işlendi: sonradan tekrar verilmez.
+        self.production_processed = whole
+        if amount:
+            economy.add_resources({self.resource_type(): amount})
+        return bool(amount)
 
     def can_upgrade(self, resources: Dict[str, int]) -> bool:
         if self.stats.level >= self.stats.max_level:
@@ -221,7 +207,8 @@ class Building(BaseEntity):
         self.building_type = new_type
         from game.building_catalog import get_cost
         self.cost = get_cost(new_type)
-        self.stats.level += 1
+        from game.building_catalog import get_building_level
+        self.stats.level = get_building_level(new_type)
         self.is_constructed = False
         self.construction_progress = 0.0
         self._load_tower_combat()

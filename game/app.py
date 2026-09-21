@@ -1,5 +1,8 @@
 import pygame
-import sys
+import time
+from game.session_menu import SessionMenu
+from game.simulation import advance_production
+from game.save_load import SaveError
 from game.constants import SCREEN_WIDTH, SCREEN_HEIGHT, FPS
 from game.camera import Camera
 from game.world import World
@@ -22,7 +25,7 @@ from game.grid import cell_of
 
 
 class GameApp:
-    def __init__(self):
+    def __init__(self, save_dir=None, time_source=None):
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Social Empires Clone")
@@ -35,7 +38,16 @@ class GameApp:
         self.renderer = Renderer(self.screen, self.camera)
         self.ui = UIManager(self.economy)
         self.selection = SelectionManager()
-        self.save_manager = SaveManager()
+        self.save_manager = SaveManager(save_dir)
+        self.time_source = time_source or time.time
+        self.menu = SessionMenu()
+        self.screen_mode = "home"
+        self.records = self.save_manager.list_worlds()
+        self.message = ""
+        self.message_timer = 0.0
+        self.active_session = False
+        self.pending_exit = None
+        self._error_elapsed = 0.0
         self.ai = AIController(self.world)
         self.battle_manager = BattleManager(self.world)
         self.xp_system = XPSystem(self.ui)
@@ -99,21 +111,181 @@ class GameApp:
         for gx, gy in [(9, 9), (39, 11), (11, 39)]:
             self.world.add_entity(ResourceNode("gem", gx, gy, 60))
 
+    def _snapshot(self, world=None, economy=None, xp=None, camera=None, king_name=None):
+        world = world or self.world
+        xp = xp or self.xp_system
+        return self.save_manager.serialize(
+            world, economy or self.economy, king_name or self.ui.king_name, xp.level, xp.xp,
+            xp_state={k: getattr(xp, k) for k in ('level', 'xp', 'max_xp', 'xp_multiplier')},
+            camera=camera or {k: getattr(self.camera, k) for k in ('x', 'y', 'zoom')},
+            saved_at=self.time_source())
+
+    def _notify(self, text):
+        self.message, self.message_timer = text, 5.0
+
+    def save_game(self):
+        if not self.active_session:
+            return True
+        try:
+            data = self._snapshot()
+            self.save_manager.save_world(data)
+        except (OSError, SaveError, ValueError, OverflowError) as exc:
+            self._notify(f'Kayıt başarısız: {exc}')
+            return False
+        self.world.processed_at = data['processed_at']
+        self._notify('Dünya kaydedildi.')
+        return True
+
+    def new_game(self, name=''):
+        self.selection.clear_selection()
+        self.world, self.economy = World(), EconomyEngine()
+        names = {r['name'] for r in self.save_manager.list_worlds()}
+        index = 1
+        while f'Dünya {index}' in names:
+            index += 1
+        self.world.name = name.strip()[:40] or f'Dünya {index}'
+        self.world.created_at = self.world.processed_at = self.time_source()
+        self.ui = UIManager(self.economy)
+        self.ui.on_buy = self._enter_build_mode
+        self.xp_system = XPSystem(self.ui)
+        self.ai = AIController(self.world)
+        self.battle_manager = BattleManager(self.world)
+        self.construction_manager = ConstructionManager(self.world, self.economy)
+        self.camera.zoom = 1.0
+        self._setup_world()
+        self.active_session = True
+        self.screen_mode = 'game'
+        self._build_mode = self.pending_confirm = None
+        self.autosave_timer = 0.0
+        self.save_game()
+
+    def load_game(self, filename, backup=False):
+        try:
+            data = self.save_manager.load_from_file(filename + '.bak' if backup else filename)
+            if filename != data['world_id'] + '.json':
+                raise SaveError('Kayıt kimliği dosyayla uyuşmuyor.')
+            world, economy, metadata = self.save_manager.restore(data)
+            ui = UIManager(economy)
+            ui.king_name = metadata['king_name']
+            xp = XPSystem(ui)
+            for key, value in metadata['xp_state'].items():
+                setattr(xp, key, value)
+            xp._sync_ui()
+            elapsed = max(0.0, self.time_source() - world.processed_at)
+            advance_production(world, economy, xp, elapsed)
+            updated = self._snapshot(world, economy, xp, metadata['camera'], ui.king_name)
+            # Ödül ve işlenmiş zaman kalıcı olmadan oturum yayımlanmaz.
+            self.save_manager.save_world(updated)
+        except (OSError, SaveError, ValueError, OverflowError) as exc:
+            self._notify(f'Dünya açılamadı: {exc}')
+            return False
+        self.selection.clear_selection()
+        self.world, self.economy, self.ui, self.xp_system = world, economy, ui, xp
+        self.world.processed_at = updated['processed_at']
+        self.ui.on_buy = self._enter_build_mode
+        for key, value in metadata['camera'].items():
+            setattr(self.camera, key, value)
+        self.ai, self.battle_manager = AIController(world), BattleManager(world)
+        self.construction_manager = ConstructionManager(world, economy)
+        self.construction_manager.player_level = xp.level
+        self.active_session, self.screen_mode = True, 'game'
+        self.autosave_timer = 0.0
+        self._build_mode = self.pending_confirm = None
+        self._notify('Dünya açıldı; çevrimdışı süre işlendi.')
+        return True
+
+    def _finish_exit(self, destination):
+        self.active_session = False
+        if destination == 'quit':
+            self.running = False
+        else:
+            self.screen_mode = 'home'
+            self.records = self.save_manager.list_worlds()
+        self.pending_exit = None
+
+    def request_exit(self, destination):
+        if self.screen_mode == "save_error" and self._error_elapsed:
+            advance_production(self.world, self.economy, self.xp_system, self._error_elapsed)
+            self._error_elapsed = 0.0
+        if self.save_game():
+            self._finish_exit(destination)
+        else:
+            self.pending_exit, self.screen_mode = destination, 'save_error'
+
+    def _menu_action(self, action):
+        if isinstance(action, tuple):
+            self.load_game(action[1], backup=action[0] == 'backup')
+        elif action in ('home', 'new', 'load'):
+            self.screen_mode = action
+            self.records = self.save_manager.list_worlds()
+            if action == 'new':
+                self.menu.name = ''
+                pygame.key.start_text_input()
+        elif action == 'create':
+            pygame.key.stop_text_input()
+            self.new_game(self.menu.name)
+        elif action == 'quit':
+            self.running = False
+        elif action == 'previous':
+            self.menu.page -= 1
+        elif action == 'next':
+            self.menu.page += 1
+        elif action == 'retry':
+            self.request_exit(self.pending_exit)
+        elif action == 'resume':
+            # Hata ekranında geçen süre üretime dahil, savaş/hareket donuktur.
+            advance_production(self.world, self.economy, self.xp_system, self._error_elapsed)
+            self._error_elapsed = 0.0
+            self.screen_mode, self.pending_exit = 'game', None
+        elif action == 'discard':
+            self._finish_exit(self.pending_exit)
+
     def run(self):
+        self._error_elapsed = 0.0
         while self.running:
             dt = self.clock.tick(FPS) / 1000.0
             self.click_timer += dt
+            self.message_timer = max(0.0, self.message_timer - dt)
             self._handle_events()
-            self._update(dt)
-            self._render()
-            self._autosave(dt)
+            if not self.running:
+                break
+            if self.screen_mode == 'game':
+                self._update(dt)
+                self._render()
+                self._autosave(dt)
+            else:
+                if self.screen_mode == 'save_error':
+                    self._error_elapsed += dt
+                self.menu.draw(self.screen, self.screen_mode, self.records, self.message)
+                pygame.display.flip()
         pygame.quit()
 
     def _handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                self.running = False
+                if self.screen_mode == 'save_error':
+                    continue
+                if self.active_session:
+                    self.request_exit('quit')
+                else:
+                    self.running = False
                 continue
+            if self.screen_mode != 'game':
+                self._menu_action(self.menu.handle_event(event, self.screen_mode))
+                continue
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_F5:
+                self.save_game()
+                continue
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_F10:
+                self.request_exit('home')
+                continue
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if pygame.Rect(980, 10, 130, 32).collidepoint(event.pos):
+                    self.save_game()
+                    continue
+                if pygame.Rect(1120, 10, 145, 32).collidepoint(event.pos):
+                    self.request_exit('home')
+                    continue
 
             if self.pending_confirm:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -168,10 +340,12 @@ class GameApp:
                                     -event.rel[1] / self.camera.zoom)
 
     def _enter_build_mode(self, building_type: str):
+        self.construction_manager.player_level = self.xp_system.level
         if self.construction_manager.can_build(building_type):
             self._build_mode = building_type
         else:
             self._build_mode = None
+            self._notify(self.construction_manager.last_error)
 
     def _handle_left_click(self, pos):
         wx, wy = self.camera.screen_to_world(pos[0], pos[1])
@@ -187,13 +361,12 @@ class GameApp:
         self.last_click_pos = pos
 
         if self._build_mode:
-            gx, gy = cell_of(wx, wy)
-            if (0 <= int(gx) < self.world.width and 0 <= int(gy) < self.world.height
-                    and self.world.tiles[int(gx)][int(gy)] == "safe"):
-                building = self.construction_manager.place_building(self._build_mode, wx, wy)
-                if building:
-                    self.xp_system.reward_building_constructed(self._build_mode)
-            self._build_mode = None
+            self.construction_manager.player_level = self.xp_system.level
+            building = self.construction_manager.place_building(self._build_mode, wx, wy)
+            if building:
+                self._build_mode = None
+            else:
+                self._notify(self.construction_manager.last_error)
             return
 
         entity = self.renderer.pick_entity_at(pos, self.world.entities)
@@ -250,39 +423,35 @@ class GameApp:
                         return
                     cost = get_cost(ut)
                     if self.economy.can_afford(cost) and self.economy.spend(cost):
-                        # Pause production queue during upgrade
-                        pqueue = getattr(b, 'production_queue', None)
-                        if pqueue:
-                            b._upgrade_pending_queue = list(pqueue.queue)
-                            pqueue.queue.clear()
-                            pqueue.current_production = None
-                            pqueue.progress = 0.0
                         b.upgrade(ut)
                         self._build_ui_buttons(b)
                 self.ui.add_button(700, 10, 100, 30, "Geliştir", do_upgrade)
 
         # Kaynak binaları: köylü atama + çalışma modları + pasif f(t) üretimi
         if base == "resource":
-            def smart_toggle():
+            def toggle_passive():
+                if entity.is_producing:
+                    entity.stop_production()
+                else:
+                    entity.start_production()
+                self._build_ui_buttons(entity)
+
+            def toggle_workers():
                 if entity.worker_active:
                     entity.cancel_worker_production()
                 elif entity.pending_worker_mode:
                     if entity.start_worker_production(entity.pending_worker_mode, self.economy):
                         entity.pending_worker_mode = None
-                else:
-                    if entity.is_producing:
-                        entity.stop_production()
                     else:
-                        entity.start_production()
+                        self._notify('Köylü atanmalı ve yeterli mücevher olmalı.')
+                else:
+                    self._notify('Önce bir köylü çalışma modu seç.')
                 self._build_ui_buttons(entity)
 
-            if entity.worker_active:
-                label = "Durdur"
-            elif entity.pending_worker_mode:
-                label = "Başlat"
-            else:
-                label = "Durdur" if entity.is_producing else "Başlat"
-            self.ui.add_button(300, 10, 100, 30, label, smart_toggle)
+            self.ui.add_button(300, 10, 175, 30,
+                'Pasif: Durdur' if entity.is_producing else 'Pasif: Başlat', toggle_passive)
+            self.ui.add_button(485, 10, 200, 30,
+                'Köylü: Durdur' if entity.worker_active else 'Köylü: Başlat', toggle_workers)
 
             from game.work_modes import MODE_ORDER, WORK_MODES
             x = 300
@@ -329,12 +498,12 @@ class GameApp:
         for u in units:
             if isinstance(u, Worker):
                 if res_building:
-                    # Kaynak binasına sağ tık: köylüyü ata + binaya yürüt
-                    if u in res_building.assigned_workers or res_building.assign_worker(u):
-                        u.move_to(res_building.x, res_building.y)
+                    # Kabul edilen davranış: anında ata ve bina içinde gizle.
+                    res_building.assign_worker(u)
                 elif resource:
                     u.assign_task("gather", resource)
                 elif enemy:
+                    u.task = u.task_target = None
                     u.attack_target(enemy)
                 else:
                     u.task = None
@@ -345,78 +514,38 @@ class GameApp:
                 u.move_to(wx, wy)
 
     def _update(self, dt: float):
-        # Update entities with correct signatures
-        for e in self.world.entities:
-            if isinstance(e, Worker):
-                e.update(dt, self.world, self.economy)
-            elif isinstance(e, Building):
-                if e.is_producing and e.is_constructed:
-                    e.update(dt, self.economy)
-            elif isinstance(e, ResourceNode):
-                e.update(dt)
-            elif isinstance(e, Unit):
-                e.update(dt)
-
-        # Aynı hücrede üst üste kalan birimleri ayır (MVP)
+        for entity in list(self.world.entities):
+            if isinstance(entity, Worker):
+                entity.update(dt, self.world, self.economy)
+            elif isinstance(entity, Unit):
+                entity.update(dt)
         self.world._resolve_overlaps()
-
-        # Update battle system
         self.battle_manager.update(dt)
-
-        # Update AI
         self.ai.update(dt)
-
-        # Update construction manager
+        advance_production(self.world, self.economy, self.xp_system, dt)
+        self.construction_manager.player_level = self.xp_system.level
         self.construction_manager.update(dt)
-
-        # Auto-build constructions (no workers needed for MVP)
-        for e in self.world.entities:
-            if isinstance(e, Building) and not e.is_constructed:
-                e.construction_progress += dt * (100.0 / e.build_time)
-                if e.construction_progress >= 100:
-                    e.is_constructed = True
-                    e.construction_progress = 100.0
-                    # Baraka tamamlandıysa üretim kuyruğu bağla
-                    if get_base(e.building_type) == "barracks" and not hasattr(e, 'production_queue'):
-                        e.production_queue = ProductionQueue(e, self.economy)
-                    # Restore pending production queue after upgrade
-                    if hasattr(e, '_upgrade_pending_queue'):
-                        pq = getattr(e, 'production_queue', None)
-                        if pq:
-                            for item in e._upgrade_pending_queue:
-                                pq.queue.append(item)
-                        del e._upgrade_pending_queue
-                    self.xp_system.reward_building_constructed(e.building_type)
-
-        # Köylü çalışma modu üretimi (zamanlı)
-        for e in self.world.entities:
-            if isinstance(e, Building) and e.worker_active:
-                reward = e.update_worker_production(dt, self.economy)
-                if reward:
-                    self.xp_system.reward_building_constructed(e.building_type)
-
-        # Update production queues
-        for e in self.world.entities:
-            if isinstance(e, Building) and hasattr(e, 'production_queue'):
-                new_unit = e.production_queue.update(dt, self.world)
-                if new_unit and hasattr(new_unit, 'unit_type'):
-                    self.xp_system.reward_unit_trained(new_unit.unit_type)
-
-        # Award XP for dead enemies before cleanup
-        dead_enemies = [e for e in self.world.entities
-                        if isinstance(e, Unit) and not e.is_alive() and not e.is_player]
-        for dead in dead_enemies:
-            self.xp_system.reward_kill(dead.unit_type)
-
-        # Clean up dead entities
+        for entity in self.world.entities:
+            if isinstance(entity, Unit) and not entity.is_alive() and not entity.is_player:
+                self.xp_system.reward_kill(entity.unit_type)
         self.world.entities = [e for e in self.world.entities if e.is_alive()]
+        if self.selection.selected:
+            selected = self.selection.selected[0]
+            if not selected.is_alive():
+                self.selection.clear_selection()
+                self.ui.clear_buttons()
+            elif isinstance(selected, Building):
+                self._build_ui_buttons(selected)
+        errors = [u.movement_error for u in self.selection.get_selected_units() if u.movement_error]
+        if errors:
+            self._notify(errors[0])
 
     def _render(self):
         self.screen.fill((0, 0, 0))
         self.renderer.draw_map(self.world)
         self.renderer.draw_entities(self.world.entities)
         for e in self.world.entities:
-            if e.is_alive() and hasattr(e, 'stats') and hasattr(e.stats, 'hp'):
+            if e.is_alive() and not getattr(e, "is_inside_building", None) and hasattr(e, 'stats') and hasattr(e.stats, 'hp'):
                 self.renderer.draw_hp_bar(e)
             if e.is_alive() and hasattr(e, 'gather_timer') and e.gather_timer > 0:
                 self.renderer.draw_gather_bar(e)
@@ -427,12 +556,22 @@ class GameApp:
             mx, my = pygame.mouse.get_pos()
             wx, wy = self.camera.screen_to_world(mx, my)
             sx, sy = self.camera.world_to_screen(wx, wy)
-            pygame.draw.circle(self.screen, (0, 255, 0), (int(sx), int(sy)), 20, 2)
+            error = self.construction_manager.placement_error(self._build_mode, wx, wy)
+            color = (255, 60, 60) if error else (0, 255, 0)
+            pygame.draw.circle(self.screen, color, (int(sx), int(sy)), 20, 2)
             font = pygame.font.SysFont("arial", 14)
             label = font.render(f"İnşaat: {self._build_mode}", True, (0, 255, 0))
             self.screen.blit(label, (mx + 10, my - 20))
 
         self.ui.draw(self.screen, self.selection.selected)
+        for rect, label in [(pygame.Rect(980, 10, 130, 32), 'Kaydet (F5)'),
+                            (pygame.Rect(1120, 10, 145, 32), 'Menü (F10)')]:
+            pygame.draw.rect(self.screen, (45, 60, 50), rect)
+            text = self.ui.font.render(label, True, (255, 255, 255))
+            self.screen.blit(text, text.get_rect(center=rect.center))
+        if self.message_timer > 0:
+            text = self.ui.font.render(self.message[:110], True, (255, 230, 160))
+            self.screen.blit(text, (240, 60))
         if self.pending_confirm:
             self._draw_confirm_dialog()
         pygame.display.flip()
@@ -459,11 +598,9 @@ class GameApp:
         self.screen.blit(no, (bx + 270, by + 90))
 
     def _autosave(self, dt: float):
+        if not self.active_session:
+            return
         self.autosave_timer += dt
-        if self.autosave_timer >= 30.0:
-            self.autosave_timer = 0.0
-            data = self.save_manager.serialize(
-                self.world, self.economy,
-                self.ui.king_name, self.ui.townhall_level, self.ui.xp
-            )
-            self.save_manager.save_to_file("autosave.json", data)
+        if self.autosave_timer >= 30:
+            self.autosave_timer %= 30
+            self.save_game()

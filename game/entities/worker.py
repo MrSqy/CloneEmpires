@@ -17,6 +17,7 @@ class Worker(Unit):
         self.task = task_type
         self.task_target = target
         self.path = []
+        self.repath_timer = 0.0
         if task_type in ("gather", "build"):
             self.state_machine.transition("MOVE")
 
@@ -29,18 +30,25 @@ class Worker(Unit):
         Menzile girince True döner."""
         if self._within_range(gx, gy, 1):
             self.path = []
+            self.movement_error = ""
             return True
         if not self.path:
+            self.repath_timer = max(0.0, self.repath_timer - dt)
+            if self.repath_timer > 1e-9:
+                return False
+            self.repath_timer = 0.5
             w = getattr(self, 'world', None)
             if w is None:
                 self.path = [(gx, gy)]
             else:
                 goal = w.nearest_free_cell((gx, gy), ignore=self)
                 if goal is None:
+                    self.movement_error = "Kaynağa ulaşan yol yok."
                     return False
                 self.path = find_path(self.cell, goal, w.make_blocked(ignore=self))
                 if not self.path and self.cell != goal:
-                    self.path = [goal]
+                    self.movement_error = "Kaynağa ulaşan yol yok."
+                    return False
         self._advance_along_path(dt)
         return self._within_range(gx, gy, 1)
 
@@ -50,6 +58,10 @@ class Worker(Unit):
             return
         if self.is_inside_building:
             return  # Inside building: frozen until removed
+
+        if self.task is None:
+            super().update(dt)
+            return
 
         if self.attack_cooldown > 0:
             self.attack_cooldown -= dt
@@ -61,10 +73,6 @@ class Worker(Unit):
         elif self.task == "working" and self.task_target is not None and self.task_target.is_alive():
             # Kaynak binasına atanmış: binanın komşusuna yürü, sonra çalış
             if self._approach_cell(*cell_of(self.task_target.x, self.task_target.y), dt):
-                self.state_machine.transition("IDLE")
-        elif self.state_machine.current == "MOVE":
-            self._advance_along_path(dt)
-            if not self.path:
                 self.state_machine.transition("IDLE")
 
     def _do_gather(self, dt: float, world, economy):
@@ -108,7 +116,8 @@ class Worker(Unit):
         if hasattr(target, 'construction_progress'):
             target.construction_progress += 20 * dt
             if target.construction_progress >= 100:
-                target.is_constructed = True
+                # Tamamlanma, kuyruk kurulması ve tek XP ödülü ortak saatte.
+                target.construction_progress = 100.0
                 self.task = None
                 self.path = []
                 self.state_machine.transition("IDLE")

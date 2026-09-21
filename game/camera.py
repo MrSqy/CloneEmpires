@@ -14,12 +14,12 @@ class Camera:
         self.y += dy
 
     def change_zoom(self, delta, mouse_x, mouse_y):
-        old_zoom = self.zoom
+        wx, wy = self.screen_to_world(mouse_x, mouse_y)
         self.zoom = max(MIN_ZOOM, min(MAX_ZOOM, self.zoom + delta))
-        if self.zoom != old_zoom:
-            factor = self.zoom / old_zoom
-            self.x = mouse_x - (mouse_x - self.x) * factor
-            self.y = mouse_y - (mouse_y - self.y) * factor
+        from game.isometric import world_to_screen
+        sx, sy = world_to_screen(wx, wy)
+        self.x = sx - (mouse_x - self.sw / 2) / self.zoom
+        self.y = sy - (mouse_y - self.sh / 2) / self.zoom
 
     def world_to_screen(self, wx, wy):
         from game.isometric import world_to_screen as w2s

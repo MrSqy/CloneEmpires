@@ -4,7 +4,7 @@ Tüm satın alınabilir binalar burada tanımlı. Market sekmeleri ve maliyetler
 bu tek kaynaktan üretilir. `base` alanı binanın davranışını belirler:
     - "resource"  -> kaynak üretir (building.py içindeki resource_map)
     - "barracks"  -> asker eğitir (trains listesi)
-    - "tower"     -> savunma yapısı (şimdilik pasif)
+    - "tower"     -> savunma yapısı
     - "house"     -> nüfus
 """
 
@@ -47,6 +47,16 @@ CATALOG = {
     "quarry": dict(category="Kaynaklar", label="Taş Ocağı", base="resource",
                    cost={"wood": 60, "stone": 30}, level_req=1),
 }
+
+# Bina seviyesi, oyuncunun satın alma gereksiniminden ayrı tutulur.
+for _building_type, _metadata in CATALOG.items():
+    _metadata["building_level"] = 2 if _building_type.endswith("_2") else 1
+
+
+def get_building_level(building_type):
+    """Katalogdaki binanın kendi seviyesini döndürür."""
+    return CATALOG.get(building_type, {}).get("building_level", 1)
+
 
 # Kule savaş statları (building_type -> combat)
 TOWER_COMBAT = {
