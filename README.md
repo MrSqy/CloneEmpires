@@ -1,129 +1,95 @@
 # CloneEmpires
 
-> **Isometric RTS — Build, Battle, Conquer.**
+Python ve Pygame ile yazılmış, Social Empires'ten ilham alan tek oyunculu izometrik strateji prototipi. Köylülerle kaynak topla, güvenli bölgeye binalar kur, asker üret ve trollerle savaş.
 
-CloneEmpires, klasik Facebook oyunu **Social Empires**'ten ilham alan, Python & Pygame ile geliştirilmiş izometrik strateji oyunudur. Kaynak toplayın, ordunuzu kurun, kuleler dikin ve troll ordularına karşı üssünüzü savunun.
+Projeyi ve kodunu adım adım öğrenmek için **[Türkçe proje rehberini](tutorial.md)** oku. Kabul edilen kararlar, ilk inceleme ve doğrulama kaydı **[uygulama planında](UYGULAMA_PLANI.md)** bulunuyor.
 
-![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
-![Pygame](https://img.shields.io/badge/pygame-2.5+-green.svg)
-![License](https://img.shields.io/badge/license-MIT-yellow.svg)
+## Kurulum ve çalıştırma
 
----
-
-## Özellikler
-
-| Alan | Detay |
-|------|-------|
-| 🏗️ **İnşaat Sistemi** | Town Hall, barakalar, kaynak binaları ve kuleler inşa edin. Yeşil güvenli bölgede serbest inşaat. |
-| ⚔️ **Savaş Mekaniği** | Grid-tabanlı hareket, menzilli/melee ayrımı, homing projectile'lar, counter-attack. |
-| 🪵 **Kaynak Ekonomisi** | Odun, taş, gıda, altın ve nadir mücevher madenleri. f(t) üretim formülü ile pasif gelir. |
-| 👷 **Köylü Sistemi** | Kaynak binalarına atama, 4 farklı çalışma modu (Maraton/Hızlı/Normal/Kısa), üretim kuyruğu. |
-| 🏰 **Baraka & Asker** | Mızrakçı, Kılıçlı, Okçu, Atlı, Mage. Level 2 barakalar 2 kat güçlü L2 asker üretir. |
-| 🎯 **Geliştirme** | Barakalar ve kuleler Level 2'ye yükseltilebilir (tadilat + kaynak şartı). |
-| 💾 **Kaydetme** | Otomatik 30 saniyede bir autosave. Manuel save/load desteği. |
-| 🎨 **İzometrik Görünüm** | Zoom (0.5x–3x), kaydırma, z-sıralamalı entity render. |
-
----
-
-## Kurulum
+Python 3.10 veya üzeri gerekir. Güncel doğrulama Linux / Python 3.12.3 üzerinde yapıldı.
 
 ```bash
-# 1. Repoyu klonlayın
 git clone https://github.com/MrSqy/CloneEmpires.git
 cd CloneEmpires
-
-# 2. Sanal ortam oluşturun
-python -m venv .venv
-source .venv/bin/activate   # Linux/Mac
-# .venv\Scripts\activate    # Windows
-
-# 3. Bağımlılıkları yükleyin
-pip install -r requirements.txt
-
-# 4. Sprite'ları oluşturun (procedural assetler)
-python tools/generate_sprites.py
-
-# 5. Oyunu başlatın
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 python main.py
 ```
 
----
+Windows'ta sanal ortamı `py -m venv .venv` ile oluşturup PowerShell'de `.venv\Scripts\Activate.ps1` ile etkinleştirebilirsin. Windows/macOS çalıştırması bu teslimde doğrulanmadı.
+
+Hazır PNG görseller depoda bulunuyor; oyunu açmak için yeniden üretmek gerekmez. Normal kurulum yalnız Pygame yükler. Testler ve isteğe bağlı görsel üretimi için:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest tests -q
+```
+
+Görselleri gerçekten yenilemek istediğinde `python tools/generate_sprites.py` çalıştır. Bu komut Pillow kullanır ve `assets/` altındaki PNG'lerin üzerine yazar.
+
+## Oyun akışı
+
+- **Yeni oyun:** İsteğe bağlı bir dünya adı gir. Boş bırakırsan `Dünya 1` gibi kullanılmayan bir ad seçilir. Her dünya ayrı dosyaya kaydedilir.
+- **Devam et:** Dünya adı, oyuncu seviyesi ve son kayıt zamanını gösteren listeden seç. Son kaydedilen dünya üsttedir.
+- **Üretim:** Oyun kapalıyken veya başka dünyadayken açık pasif üretim, başlatılmış köylü işi, ödenmiş asker siparişleri, inşaat/geliştirme ve kaynak yenilenmesi ilerler. Hareket, savaş ve sahadaki kaynak toplama durur. Yeni ücretli iş kendiliğinden başlamaz.
+- **İnşaat:** Marketten bina seçip yeşil bölgedeki boş hücreye yerleştir. Geçersiz yerde ücret kesilmez. İnşaat bitince XP (deneyim puanı) bir kez verilir.
+- **Baraka geliştirme:** Kuyruk korunup geliştirme boyunca durur. Önceden verilmiş L1 siparişleri L1, geliştirmeden sonraki siparişler L2 olur. Doğrudan alınan L2 baraka da L2 asker üretir.
+- **Köylü çalışması:** Köylüyü seçip kaynak binasına sağ tıkla; anında içeri alınır. Mod seçip `Köylü: Başlat` ile mücevher karşılığı işi başlat. `Pasif: Başlat` ayrı bir üretim kontrolüdür; ikisi birlikte çalışabilir.
 
 ## Kontroller
 
-| Tuş / Eylem | Fonksiyon |
-|-------------|-----------|
-| **Sol Tık** | Birim/bina seç, inşaat yerleştir |
-| **Çift Sol Tık** | Aynı tipteki tüm birimleri seç |
-| **Sağ Tık** | Seçili birimleri hareket ettir / saldır / kaynak topla |
-| **Orta Tık Sürükle** | Haritayı kaydır |
-| **Tekerlek** | Yakınlaştır / Uzaklaştır |
-| **ESC** | Seçimi temizle, pencereyi kapat |
-| **1** | Oduncu Evi inşaat modu |
-| **2** | Çiftlik inşaat modu |
-| **3** | Mızrakçı Barakası inşaat modu |
-| **4** | Ev inşaat modu |
+| Eylem | Sonuç |
+| --- | --- |
+| Sol tık | Birim/bina/kaynak seç; inşaat modunda yerleştir |
+| Çift sol tık | Yakındaki aynı tür oyuncu birimlerini seç |
+| Sağ tık | Seçili oyuncu birimine yürü/saldır emri; köylüye kaynak toplama veya binaya girme emri |
+| Orta tuş sürükleme | Kamerayı kaydır |
+| Fare tekerleği | İmleç altındaki noktayı koruyarak 0,5×–3× yakınlaştır |
+| Esc | Seçimi, marketi ve inşaat modunu kapat; oturum menülerinde geri dön |
+| 1 / 2 / 3 / 4 | Oduncu / çiftlik / L1 mızrakçı barakası / ev inşaatını seç |
+| F5 veya Kaydet | Aktif dünyayı kaydet |
+| F10 veya Menü | Kaydedip ana menüye dön |
+| Pencereyi kapat | Aktif dünyayı kaydedip çık |
 
----
+Düşmanlar bilgi için seçilebilir; oyuncu onlara emir veremez. Ulaşılamayan yolda birim bekler. Yeni birim için hiç boş hücre yoksa ödenmiş sipariş yer açılana kadar korunur.
 
-## Birimler & Statlar
+## Kayıtlar
 
-| Birim | Can | Hasar | Menzil | Görüş | Özellik |
-|-------|-----|-------|--------|-------|---------|
-| **Mızraklı** | 150 | 15 | 2 | 8 | Dengeli tank |
-| **Kılıçlı** | 100 | 20 | 1 | 7 | Yüksek hasar |
-| **Okçu** | 60 | 25 | 8 | 14 | Uzaktan ölüm |
-| **Mage** | 70 | 28 (büyü) | 5 | 10 | Büyü hasarı |
-| **Atlı** | 140 | 18 | 1 | 7 | Hızlı hücum |
+Kayıtlar çalışma dizininden bağımsız olarak repo içindeki `saves/` klasöründe tutulur:
 
-> **Level 2** birimlerde altın rozet görünür; can ve hasar **2 kat**.
+- `<dünya-kimliği>.json`: Sürümlü dünya durumu; ad, ekonomi, XP, birimler, görev/hedef bağları, binalar, sayaçlar, kuyruklar ve kamera.
+- `<dünya-kimliği>.json.bak`: Bir önceki sağlam kayıt.
+- Geçici dosya tamamlandıktan sonra ana dosyanın yerini alır. Kayıt 30 saniyede bir, yeni dünyada, manuel istekte ve normal çıkışta alınır.
+- Kaydetme başarısızsa oturum bellekte tutulur; çıkış sırasında **Tekrar dene / Oyuna dön / Kaydetmeden çık** seçenekleri gösterilir. Ana dosya bozuk ve yedek sağlamsa listede **Yedekten aç** görünür.
+- Eski, sürümsüz `autosave.json` korunur; otomatik aktarım desteklenmez. Eski kayıt listede açıklamasıyla görünür.
 
----
+Çevrimdışı üretim yerel saate dayanır. Saatin geri gitmesi negatif kazanç veya aynı sürenin tekrar ödenmesini üretmez; ileri alınması geliri etkileyebilir. Zorla kapatmada son başarılı kayıttan sonraki ilerleme kaybolabilir.
 
-## Proje Yapısı
+## Kapsam ve doğrulama
 
-```
-CloneEmpires/
-├── game/                 # Ana oyun motoru
-│   ├── app.py            # Ana döngü (GameApp)
-│   ├── renderer.py       # İzometrik render & sprite cache
-│   ├── battle_manager.py # Savaş, projectile, AI acquire
-│   ├── economy.py        # f(t) üretim & depolama
-│   ├── entities/         # Unit, Building, Worker, Resource, Projectile
-│   ├── grid.py           # A* pathfinding, cell math
-│   ├── ui.py             # Bottom bar, market, butonlar
-│   └── ...
-├── assets/               # Procedural PNG sprite'lar
-├── tests/                # 85+ pytest testi
-├── tools/                # Sprite generator (Pillow)
-├── saves/                # Otomatik kayıtlar
-└── main.py               # Giriş noktası
-```
+Oyuncu Town Hall'da köylü; üç baraka türünde mızrakçı, kılıçlı ve okçu üretir. Atlı/Mage modelleri kaynakta vardır fakat üretim arayüzleri yoktur. Evler henüz nüfus kuralı uygulamaz. Depo geliştirme arayüzü, kule tamir/geliştirme arayüzü, kazanma/kaybetme ekranı, ses ve çok oyunculu oyun bu kapsamda bulunmuyor.
 
----
+21 Eylül 2026 doğrulaması:
 
-## Test
+- Temiz sanal ortamda **130 test geçti** (Pygame 2.6.1, pytest 9.1.1).
+- Yalnız çalışma bağımlılığıyla açılış, sahne çizimi, kayıt ve normal kapanış geçti.
+- Gerçek X11 penceresinde programatik girişle iki dünya oluşturma, market, köylü atama/üretim, yakınlaştırma, kontrollü savaş, kayıt seçimi, hata ekranından dönüş ve kaydederek kapanış geçti; ekran görüntüleri incelendi.
+- Pillow 12.3.0 ile 85 PNG geçici klasörde üretildi ve açılarak doğrulandı; depodaki görseller değişmedi.
+- Testler geçici kayıt klasörlerini kullanır. Uzun süreli elle oynanış, denge, FPS, fiziksel disk/güç kesintisi ve Windows/macOS çalıştırması doğrulanmadı.
 
-```bash
-pytest tests/ -v
-```
+## Dosya haritası
 
----
+| Konum | Rol |
+| --- | --- |
+| `main.py`, `game/app.py` | Başlatma ve ana oyun döngüsü |
+| `game/session_menu.py`, `game/save_load.py` | Oturum menüleri, doğrulama ve kayıt |
+| `game/simulation.py` | Açık/kapalı oyunun ortak üretim hesabı |
+| `game/entities/` | Birim, köylü, bina, doğal kaynak ve mermi |
+| `game/world.py`, `game/grid.py` | Harita, doluluk ve yol bulma |
+| `game/renderer.py`, `game/camera.py`, `game/ui.py` | Çizim, kamera ve kullanıcı arayüzü |
+| `assets/`, `tools/generate_sprites.py` | Hazır görseller ve isteğe bağlı üreticisi |
+| `tests/` | Davranış ve regresyon testleri |
+| `tutorial.md` | Tüm dosyalar, fonksiyonlar ve uçtan uca öğretici örnekler |
 
-## Yol Haritası
-
-- [ ] Custom model/asset entegrasyonu
-- [ ] Market sistemi (bina satın alma)
-- [ ] Çok oyunculu temelleri
-- [ ] Ses & müzik
-- [ ] Alan genişletme (yeşil → kahverengi bölge)
-
----
-
-## Lisans
-
-MIT License — detaylar için [LICENSE](LICENSE) dosyasına bakın.
-
----
-
-> *Made with ☕ & Pygame by Baran.*
+Lisans: [MIT](LICENSE).
